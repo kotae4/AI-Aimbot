@@ -2,3 +2,7 @@ test*
 *.onnx
 *.pt
 *.torchscript
+__pycache__/
+.vscode/
+venv/
+config.json
