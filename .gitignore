@@ -5,4 +5,5 @@ test*
 __pycache__/
 .vscode/
 venv/
+models/
 config.json
