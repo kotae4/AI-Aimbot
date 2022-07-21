@@ -12,7 +12,11 @@ import torch;
 import cv2;
 # needed by torch internally
 import pandas;
-pandas.options.mode.chained_assignment = None;  
+pandas.options.mode.chained_assignment = None;
+
+import onnxruntime as ort;
+from utils.general import (LOGGER, check_file, check_img_size, check_imshow, check_requirements, colorstr, cv2,
+                           increment_path, non_max_suppression, print_args, scale_coords, strip_optimizer, xyxy2xywh);
 
 def GetWindowByTitle(title : str) -> pyautogui.Window:
     matchingWindows = pyautogui.getWindowsWithTitle(title);
@@ -51,33 +55,37 @@ def BotLogic(app : GUI, cam : dxcam.DXCamera):
     bottom = (centerY_desktopspace + screenShotHeight);
     # dxcam expects tuple of (left, top, right, bottom) in that order
     captureRegion = (left, top, right, bottom);
-    npImg = cam.grab(region=captureRegion);
-    if (npImg is None):
+    cap = cam.grab(region=captureRegion);
+    if (cap is None):
         print("Warning: could not grab frame from dxcam (skipping this frame)");
         return;
 
-    normalizedImg = torch.from_numpy(npImg).to('cpu')
-    normalizedImg = torch.movedim(normalizedImg, 2, 0)
-    normalizedImg = normalizedImg.half()
-    normalizedImg /= 255
-    if len(normalizedImg.shape) == 3:
-        normalizedImg = normalizedImg[None]
+    npImg = np.array([cap]) / 255;
+    npImg = npImg.astype(np.half);
+    npImg = np.moveaxis(npImg, 3, 1);
 
     centerX_windowspace = (right - left) // 2;
     centerY_windowspace = (bottom - top) // 2;
 
     # Detecting all the objects
-    detected = MODEL(npImg, size=screenShotHeight);
-    detectedPandas = detected.pandas();
-    results = detectedPandas.xyxy[0];
-
-    # Filtering out everything that isn't a person
-    targets = results[(results['class'] == 0) & (results['confidence'] > confidence)]
+    outputs = ORT_SESSION.run(None, {'images': npImg});
+    im = torch.from_numpy(outputs[0]).to('cpu');
+    pred = non_max_suppression(im, 0.25, 0.25, 0, False, max_det=1000);
+    #print(pred);
+    targets = [];
+    for i, det in enumerate(pred):
+        s = "";
+        gn = torch.tensor(npImg.shape)[[0, 0, 0, 0]];
+        if len(det):
+            for c in det[:, -1].unique():
+                n = (det[:, -1] == c).sum();  # detections per class
+                s += f"{n} {int(c)}, ";  # add to string
+            for *xyxy, conf, cls in reversed(det):
+                targets.append((xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist());  # normalized xywh
 
     # If there are people in the center bounding box
+    """
     if len(targets) > 0:
-        targets['current_mid_x'] = (targets['xmax'] + targets['xmin']) // 2
-        targets['current_mid_y'] = (targets['ymax'] + targets['ymin']) // 2
         # TO-DO:
         # sort by distance from center of screen
 
@@ -91,42 +99,42 @@ def BotLogic(app : GUI, cam : dxcam.DXCamera):
         else:
             headshot_offset = box_height * 0.2
         mouseMove = [targetCenterX - centerX_windowspace, (targetCenterY - headshot_offset) - centerY_windowspace]
-        cv2.circle(npImg, (int(mouseMove[0] + targetCenterX), int(mouseMove[1] + targetCenterY - headshot_offset)), 3, (0, 0, 255))
+        cv2.circle(cap, (int(mouseMove[0] + targetCenterX), int(mouseMove[1] + targetCenterY - headshot_offset)), 3, (0, 0, 255))
 
         # Moving the mouse
         if win32api.GetKeyState(0x14):
             win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, int(mouseMove[0] * aaMovementAmp), int(mouseMove[1] * aaMovementAmp), 0, 0)
+    """
 
     # See what the bot sees
     if visuals:
         # Loops over every item identified and draws a bounding box
-        for i in range(0, len(results)):
-            (startX, startY, endX, endY) = int(results["xmin"][i]), int(results["ymin"][i]), int(results["xmax"][i]), int(results["ymax"][i])
-
-            resConfidence = results["confidence"][i]
-
-            idx = int(results["class"][i])
+        for i in range(0, len(targets)):
+            (startX, startY, endX, endY) = int(targets[i][0]), int(targets[i][1]), int(targets[i][0] + targets[i][2]), int(targets[i][1] + targets[i][3]);
 
             # draw the bounding box and label on the frame
-            label = "{}: {:.2f}%".format(results["name"][i], resConfidence * 100)
-            cv2.rectangle(npImg, (startX, startY), (endX, endY),
-                COLORS[idx], 2)
-            y = startY - 15 if startY - 15 > 15 else startY + 15
-            cv2.putText(npImg, label, (startX, y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS[idx], 2)
+            cv2.rectangle(cap, (startX, startY), (endX, endY),
+                COLORS[i], 2)
         # update the GUI with the processed image
-        app.RenderCapturedImage(npImg);
+        app.RenderCapturedImage(cap);
 
 if __name__ == "__main__":
+    """
     torch.hub.set_dir(os.getcwd() + "\\models");
     print(torch.hub.get_dir());
     # Loading Yolo5 Small AI Model
     MODEL = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True, force_reload=False);
     """
+    """
     for loading local models:
     modelPath = os.getcwd() + '\\yolov6n.pt';
     print(modelPath);
     MODEL = torch.hub.load(os.getcwd(), 'custom', path=modelPath, source='local');
+    """
+    so = ort.SessionOptions();
+    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL;
+    ORT_SESSION = ort.InferenceSession('yolov5s16.onnx', sess_options=so, providers=['CUDAExecutionProvider']);
+
     """
     MODEL.classes = [0];
     MODEL.multi_label = False;
@@ -134,6 +142,7 @@ if __name__ == "__main__":
     MODEL.conf = 0.5;
     MODEL.amp = False;
     MODEL.agnostic = False;
+    """
     # Used for colors drawn on bounding boxes
     COLORS = np.random.uniform(0, 255, size=(1500, 3))
     GUI.Run(BotLogic);
