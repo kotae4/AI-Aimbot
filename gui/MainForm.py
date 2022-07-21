@@ -189,6 +189,7 @@ def Run(cb):
             app.FPSLabel.configure(text="FPS: {}".format(loopCounter));
             loopCounter = 0;
     
+    cam.stop();
     cam.release();
     del cam;
     print("Exiting gracefully!");

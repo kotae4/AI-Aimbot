@@ -14,6 +14,9 @@ import cv2;
 import pandas;
 pandas.options.mode.chained_assignment = None;  
 
+import openvino.utils as utils
+utils.add_openvino_libs_to_path()
+
 def GetWindowByTitle(title : str) -> pyautogui.Window:
     matchingWindows = pyautogui.getWindowsWithTitle(title);
     if ((matchingWindows) and (len(matchingWindows) > 0)):
@@ -51,7 +54,10 @@ def BotLogic(app : GUI, cam : dxcam.DXCamera):
     bottom = (centerY_desktopspace + screenShotHeight);
     # dxcam expects tuple of (left, top, right, bottom) in that order
     captureRegion = (left, top, right, bottom);
-    npImg = cam.grab(region=captureRegion);
+    if (cam.is_capturing is not True):
+        cam.start(captureRegion, video_mode=True);
+
+    npImg = cam.get_latest_frame();
     if (npImg is None):
         print("Warning: could not grab frame from dxcam (skipping this frame)");
         return;
