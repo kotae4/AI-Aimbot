@@ -85,30 +85,16 @@ class MainForm(Tk):
         self.FPSLabel = ttk.Label(self.VideoFrame, text="0 fps");
         self.FPSLabel.grid(row=0, column=0);
 
-        self.VideoFrontBuffer = Image.new("RGB", (self.maxWidth, self.maxHeight), "white");
-        self.VideoBackBuffer = Image.new("RGB", (self.maxWidth, self.maxHeight), "white");
-        self._CompatImage = ImageTk.PhotoImage(image=self.VideoFrontBuffer);
+        self.ImageBuffer = Image.new("RGB", (self.maxWidth, self.maxHeight), "white");
+        self._CompatImage = ImageTk.PhotoImage(image=self.ImageBuffer);
         self.VideoFrameImage = Label(self.VideoFrame, image=self._CompatImage, width=320, height=320);
         self.VideoFrameImage.grid(row=1, column=0);
-        self.VideoNeedsBufferSwap = False;
-        self.VideoNeedsBufferResize = False;
 
     def RenderCapturedImage(self, cv2Img):
-        # populates the existing image, but doesn't work because frombytes can't handle numpy arrays
-        #self.VideoBackBuffer.frombytes(cv2Img);
-        img = Image.fromarray(cv2Img);
-        tkImg = ImageTk.PhotoImage(image=img);
-        self.VideoFrameImage.configure(image=tkImg);
-        self.VideoFrameImage._cache_img = tkImg;
-        """
-        oldWidth, oldHeight = self.VideoBackBuffer.width, self.VideoBackBuffer.height;
-        self.VideoBackBuffer = Image.fromarray(cv2Img);
-        if ((self.VideoBackBuffer.width != oldWidth) or (self.VideoBackBuffer.height != oldHeight)):
-            # resize front buffer too
-            self.VideoNeedsBufferResize = True;
-
-        self.VideoNeedsBufferSwap = True;
-        """
+        # this takes like 4ms. no way to optimize this without switching away from tkinter.
+        self.ImageBuffer = Image.fromarray(cv2Img);
+        self._CompatImage = ImageTk.PhotoImage(image=self.ImageBuffer);
+        self.VideoFrameImage.configure(image=self._CompatImage);
 
     def SpawnWindowPickerDialogue(self):
         # spawn modal dialogue form that lists all top-level windows and allows user to select one
@@ -180,6 +166,7 @@ def Run(cb):
         cb(app, cam);
         app.update_idletasks();
         app.update();
+
         loopCounter = loopCounter + 1;
         endFrameTime = time.perf_counter_ns();
         oneSecondTimer = oneSecondTimer + (endFrameTime - startFrameTime);
