@@ -14,9 +14,17 @@ import cv2;
 import pandas;
 pandas.options.mode.chained_assignment = None;
 
-import onnxruntime as ort;
 from utils.general import (LOGGER, check_file, check_img_size, check_imshow, check_requirements, colorstr, cv2,
                            increment_path, non_max_suppression, print_args, scale_coords, strip_optimizer, xyxy2xywh);
+
+import platform
+#from onnx import numpy_helper
+import onnx
+import onnxruntime as ort;
+
+if platform.system() == "Windows":
+    from openvino import utils;
+    utils.add_openvino_libs_to_path();
 
 def GetWindowByTitle(title : str) -> pyautogui.Window:
     matchingWindows = pyautogui.getWindowsWithTitle(title);
@@ -133,7 +141,7 @@ if __name__ == "__main__":
     """
     so = ort.SessionOptions();
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL;
-    ORT_SESSION = ort.InferenceSession('yolov5s16.onnx', sess_options=so, providers=['CUDAExecutionProvider']);
+    ORT_SESSION = ort.InferenceSession('yolov5s16.onnx', sess_options=so, providers=['CUDAExecutionProvider', 'OpenVINOExecutionProvider', 'CPUExecutionProvider']);
 
     """
     MODEL.classes = [0];
