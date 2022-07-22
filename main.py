@@ -15,7 +15,7 @@ import pandas;
 pandas.options.mode.chained_assignment = None;
 
 from utils.general import (LOGGER, check_file, check_img_size, check_imshow, check_requirements, colorstr, cv2,
-                           increment_path, non_max_suppression, print_args, scale_coords, strip_optimizer, xyxy2xywh);
+                           increment_path, non_max_suppression, print_args, scale_coords, strip_optimizer, xywh2xyxy, xyxy2xywh);
 
 import platform
 #from onnx import numpy_helper
@@ -64,22 +64,21 @@ def BotLogic(app : GUI, cam : dxcam.DXCamera):
     top = (centerY_desktopspace - screenShotHeight);
     right = (centerX_desktopspace + screenShotWidth);
     bottom = (centerY_desktopspace + screenShotHeight);
+    centerX_windowspace = (right - left) // 2;
+    centerY_windowspace = (bottom - top) // 2;
     # dxcam expects tuple of (left, top, right, bottom) in that order
     captureRegion = (left, top, right, bottom);
     if (cam.is_capturing is not True):
         cam.start(captureRegion, video_mode=True);
 
-    npImg = cam.get_latest_frame();
-    if (npImg is None):
+    cap = cam.get_latest_frame();
+    if (cap is None):
         print("Warning: could not grab frame from dxcam (skipping this frame)");
         return;
 
     npImg = np.array([cap]) / 255;
     npImg = npImg.astype(np.half);
     npImg = np.moveaxis(npImg, 3, 1);
-
-    centerX_windowspace = (right - left) // 2;
-    centerY_windowspace = (bottom - top) // 2;
 
     # Detecting all the objects
     outputs = ORT_SESSION.run(None, {'images': npImg});
@@ -88,26 +87,21 @@ def BotLogic(app : GUI, cam : dxcam.DXCamera):
     #print(pred);
     targets = [];
     for i, det in enumerate(pred):
-        s = "";
         gn = torch.tensor(npImg.shape)[[0, 0, 0, 0]];
         if len(det):
-            for c in det[:, -1].unique():
-                n = (det[:, -1] == c).sum();  # detections per class
-                s += f"{n} {int(c)}, ";  # add to string
             for *xyxy, conf, cls in reversed(det):
-                targets.append((xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist());  # normalized xywh
+                targets.append(xywh2xyxy(xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist());
 
     # If there are people in the center bounding box
-    """
     if len(targets) > 0:
         # TO-DO:
         # sort by distance from center of screen
 
         # Take the first person that shows up in the dataframe
-        targetCenterX = round((targets.iloc[0].xmax + targets.iloc[0].xmin) / 2) + aaRightShift;
-        targetCenterY = round((targets.iloc[0].ymax + targets.iloc[0].ymin) / 2);
+        targetCenterX = round((targets[0][2] + targets[0][0]) / 2) + aaRightShift;
+        targetCenterY = round((targets[0][3] + targets[0][1]) / 2);
 
-        box_height = targets.iloc[0].ymax - targets.iloc[0].ymin
+        box_height = targets[0][3] - targets[0][1]
         if headshotMode:
             headshot_offset = box_height * 0.38
         else:
@@ -118,14 +112,15 @@ def BotLogic(app : GUI, cam : dxcam.DXCamera):
         # Moving the mouse
         if win32api.GetKeyState(0x14):
             win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, int(mouseMove[0] * aaMovementAmp), int(mouseMove[1] * aaMovementAmp), 0, 0)
-    """
 
     # See what the bot sees
     if visuals:
         # Loops over every item identified and draws a bounding box
         for i in range(0, len(targets)):
-            (startX, startY, endX, endY) = int(targets[i][0]), int(targets[i][1]), int(targets[i][0] + targets[i][2]), int(targets[i][1] + targets[i][3]);
-
+            # xywh format
+            #(startX, startY, endX, endY) = int(targets[i][0]), int(targets[i][1]), int(targets[i][0] + targets[i][2]), int(targets[i][1] + targets[i][3]);
+            # xyxy format
+            (startX, startY, endX, endY) = int(targets[i][0]), int(targets[i][1]), int(targets[i][2]), int(targets[i][3]);
             # draw the bounding box and label on the frame
             cv2.rectangle(cap, (startX, startY), (endX, endY),
                 COLORS[i], 2)
@@ -133,30 +128,10 @@ def BotLogic(app : GUI, cam : dxcam.DXCamera):
         app.RenderCapturedImage(cap);
 
 if __name__ == "__main__":
-    """
-    torch.hub.set_dir(os.getcwd() + "\\models");
-    print(torch.hub.get_dir());
-    # Loading Yolo5 Small AI Model
-    MODEL = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True, force_reload=False);
-    """
-    """
-    for loading local models:
-    modelPath = os.getcwd() + '\\yolov6n.pt';
-    print(modelPath);
-    MODEL = torch.hub.load(os.getcwd(), 'custom', path=modelPath, source='local');
-    """
     so = ort.SessionOptions();
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL;
     ORT_SESSION = ort.InferenceSession('yolov5s16.onnx', sess_options=so, providers=['CUDAExecutionProvider', 'OpenVINOExecutionProvider', 'CPUExecutionProvider']);
 
-    """
-    MODEL.classes = [0];
-    MODEL.multi_label = False;
-    MODEL.max_det = 10;
-    MODEL.conf = 0.5;
-    MODEL.amp = False;
-    MODEL.agnostic = False;
-    """
     # Used for colors drawn on bounding boxes
     COLORS = np.random.uniform(0, 255, size=(1500, 3))
     GUI.Run(BotLogic);
