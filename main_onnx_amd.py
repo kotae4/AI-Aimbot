@@ -11,12 +11,126 @@ import pandas as pd
 from utils.general import (cv2, non_max_suppression, xyxy2xywh)
 import dxcam
 import torch
-import torch_directml
+from typing import Tuple, List
 
+
+def rectWithin(r1: list, r2: list) -> bool:
+    # [0] = x (startX)
+    # [1] = y (startY)
+    # [2] = x+width (endX)
+    # [3] = y+width (endY)
+    return ((r1[0] >= r2[0] and r1[2] <= r2[2])
+            and (r1[1] >= r2[1] and r1[3] <= r2[3]))
+
+
+def rectIntersect(r1: list, r2: list) -> bool:
+    # [0] = x (startX)
+    # [1] = y (startY)
+    # [2] = x+width (endX)
+    # [3] = y+width (endY)
+    noOverlap = r1[0] > r2[2] or r1[2] < r2[0] or r1[1] > r2[3] or r1[1] < r2[3]
+    return not noOverlap
+
+
+def rectOverlap(r1: list, r2: list) -> bool:
+    return rectIntersect(r1, r2) or rectWithin(r1, r2)
+
+def CaptureFrame(camera: dxcam.DXCamera):
+    cap = camera.get_latest_frame()
+    return cap
+def ProcessFrame(cap):
+    npImg = np.array([cap]) / 255
+    npImg = npImg.astype(np.half)
+    npImg = np.moveaxis(npImg, 3, 1)
+    return npImg
+
+def RunInference(ort_sess, npImg, confidence) -> List:
+    outputs = ort_sess.run(None, {'images': npImg})
+    im = torch.from_numpy(outputs[0]).to('cpu')
+    pred = non_max_suppression(
+        im, confidence, confidence, 0, False, max_det=10)
+    return pred
+
+def GetTargetsFromPredictions(pred, npImg, blacklistedRegions) -> List:
+    targets = []
+    for i, det in enumerate(pred):
+        s = ""
+        gn = torch.tensor(npImg.shape)[[0, 0, 0, 0]]
+        if len(det):
+            for c in det[:, -1].unique():
+                n = (det[:, -1] == c).sum()  # detections per class
+                s += f"{n} {int(c)}, "  # add to string
+
+            for *xyxy, conf, cls in reversed(det):
+                detTensorScreenCoords = (xyxy2xywh(torch.tensor(xyxy).view(
+                    1, 4)) / gn).view(-1)
+                detScreenCoords = detTensorScreenCoords.tolist()
+                isBlacklisted = False
+                for blacklistedRegion in blacklistedRegions:
+                    if rectOverlap(detScreenCoords, blacklistedRegion):
+                        isBlacklisted = True
+                        break
+                if isBlacklisted == False:
+                    targets.append(detScreenCoords)
+
+    targets = pd.DataFrame(
+        targets, columns=['current_mid_x', 'current_mid_y', 'width', "height"])
+    return targets
+
+def CalculateBestTargetCoordinates(targets, last_mid_coord, aaRightShift, headshot_mode):
+    # Get the last persons mid coordinate if it exists
+    if last_mid_coord:
+        targets['last_mid_x'] = last_mid_coord[0]
+        targets['last_mid_y'] = last_mid_coord[1]
+        # Take distance between current person mid coordinate and last person mid coordinate
+        targets['dist'] = np.linalg.norm(
+            targets.iloc[:, [0, 1]].values - targets.iloc[:, [4, 5]], axis=1)
+        targets.sort_values(by="dist", ascending=False)
+
+    # Take the first person that shows up in the dataframe (Recall that we sort based on Euclidean distance)
+    xMid = targets.iloc[0].current_mid_x + aaRightShift
+    yMid = targets.iloc[0].current_mid_y
+
+    box_height = targets.iloc[0].height
+    if headshot_mode:
+        headshot_offset = box_height * 0.38
+    else:
+        headshot_offset = box_height * 0.2
+
+    return xMid, yMid, headshot_offset
+
+def MoveMouseToTarget(xMid, yMid, headshot_offset, cWidth, cHeight, aaMovementAmp):
+    mouseMove = [xMid - cWidth, (yMid - headshot_offset) - cHeight]
+    # Moving the mouse
+    if win32api.GetKeyState(0x14):
+        win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, int(
+            mouseMove[0] * aaMovementAmp), int(mouseMove[1] * aaMovementAmp), 0, 0)
+
+def RenderVisuals(cap, targets, blacklistedRegions, COLORS, confidence):
+    # Loops over every item identified and draws a bounding box
+    for i in range(0, len(targets)):
+        halfW = round(targets["width"][i] / 2)
+        halfH = round(targets["height"][i] / 2)
+        midX = targets['current_mid_x'][i]
+        midY = targets['current_mid_y'][i]
+        (startX, startY, endX, endY) = int(midX + halfW), int(midY +
+                                                              halfH), int(midX - halfW), int(midY - halfH)
+
+        idx = 0
+        # draw the bounding box and label on the frame
+        label = "{}: {:.2f}%".format("Human", confidence * 100)
+        cv2.rectangle(cap, (startX, startY), (endX, endY),
+                      COLORS[idx], 2)
+        y = startY - 15 if startY - 15 > 15 else startY + 15
+        cv2.putText(cap, label, (startX, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS[idx], 2)
+    for blackRegion in blacklistedRegions:
+        cv2.rectangle(cap, (blackRegion[0], blackRegion[1]), (blackRegion[2],
+                                                              blackRegion[3]), (0, 0, 0), 2)
 
 def main():
     # Window title to go after and the height of the screenshots
-    videoGameWindowTitle = "Counter"
+    videoGameWindowTitle = "Assault"
 
     # Portion of screen to be captured (This forms a square/rectangle around the center of screen)
     screenShotHeight = 320
@@ -27,10 +141,10 @@ def main():
     aaRightShift = 0
 
     # Autoaim mouse movement amplifier
-    aaMovementAmp = .8
+    aaMovementAmp = 0.6
 
     # Person Class Confidence
-    confidence = 0.4
+    confidence = 0.45
 
     # What key to press to quit and shutdown the autoaim
     aaQuitKey = "Q"
@@ -39,10 +153,14 @@ def main():
     headshot_mode = True
 
     # Displays the Corrections per second in the terminal
-    cpsDisplay = True
+    cpsDisplay = False
 
     # Set to True if you want to get the visuals
     visuals = False
+
+    blacklistedRegions: list[tuple] = [
+        (200, 230, screenShotWidth, screenShotHeight)
+    ]
 
     # Selecting the correct game window
     try:
@@ -63,8 +181,8 @@ def main():
 
     # Setting up the screen shots
     sctArea = {"mon": 1, "top": videoGameWindow.top + (videoGameWindow.height - screenShotHeight) // 2,
-                         "left": aaRightShift + ((videoGameWindow.left + videoGameWindow.right) // 2) - (screenShotWidth // 2),
-                         "width": screenShotWidth,
+               "left": aaRightShift + ((videoGameWindow.left + videoGameWindow.right) // 2) - (screenShotWidth // 2),
+               "width": screenShotWidth,
                          "height": screenShotHeight}
 
     # Starting screenshoting engine
@@ -95,8 +213,9 @@ def main():
 
     so = ort.SessionOptions()
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    so.enable_mem_pattern = False
     ort_sess = ort.InferenceSession('yolov5s320.onnx', sess_options=so, providers=[
-                                    'DmlExecutionProvider'])
+        'DmlExecutionProvider'])
 
     # Used for colors drawn on bounding boxes
     COLORS = np.random.uniform(0, 255, size=(1500, 3))
@@ -104,92 +223,24 @@ def main():
     # Main loop Quit if Q is pressed
     last_mid_coord = None
     while win32api.GetAsyncKeyState(ord(aaQuitKey)) == 0:
-
-        # Getting Frame
-        npImg = np.array(camera.get_latest_frame())
-
-        # Normalizing Data
-        im = torch.from_numpy(npImg)
-        im = torch.movedim(im, 2, 0)
-        im = im.half()
-        im /= 255
-        if len(im.shape) == 3:
-            im = im[None]
-
-        outputs = ort_sess.run(None, {'images': np.array(im)})
-
-        im = torch.from_numpy(outputs[0]).to('cpu')
-
-        pred = non_max_suppression(
-            im, confidence, confidence, 0, False, max_det=10)
-
-        targets = []
-        for i, det in enumerate(pred):
-            s = ""
-            gn = torch.tensor(npImg.shape)[[0, 0, 0, 0]]
-            if len(det):
-                for c in det[:, -1].unique():
-                    n = (det[:, -1] == c).sum()  # detections per class
-                    s += f"{n} {int(c)}, "  # add to string
-
-                for *xyxy, conf, cls in reversed(det):
-                    targets.append((xyxy2xywh(torch.tensor(xyxy).view(
-                            1, 4)) / gn).view(-1).tolist() + [float(conf)])  # normalized xywh
-
-        targets = pd.DataFrame(
-            targets, columns=['current_mid_x', 'current_mid_y', 'width', "height", "confidence"])
+        cap = CaptureFrame(camera)
+        if cap is None:
+            continue
+        npImg = ProcessFrame(cap)
+        pred = RunInference(ort_sess, npImg, confidence)
+        targets = GetTargetsFromPredictions(pred, npImg, blacklistedRegions)
 
         # If there are people in the center bounding box
         if len(targets) > 0:
-            # Get the last persons mid coordinate if it exists
-            if last_mid_coord:
-                targets['last_mid_x'] = last_mid_coord[0]
-                targets['last_mid_y'] = last_mid_coord[1]
-                # Take distance between current person mid coordinate and last person mid coordinate
-                targets['dist'] = np.linalg.norm(
-                    targets.iloc[:, [0, 1]].values - targets.iloc[:, [4, 5]], axis=1)
-                targets.sort_values(by="dist", ascending=False)
-
-            # Take the first person that shows up in the dataframe (Recall that we sort based on Euclidean distance)
-            xMid = targets.iloc[0].current_mid_x + aaRightShift
-            yMid = targets.iloc[0].current_mid_y
-
-            box_height = targets.iloc[0].height
-            if headshot_mode:
-                headshot_offset = box_height * 0.38
-            else:
-                headshot_offset = box_height * 0.2
-
-            mouseMove = [xMid - cWidth, (yMid - headshot_offset) - cHeight]
-
-            # Moving the mouse
-            if win32api.GetKeyState(0x14):
-                win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, int(
-                    mouseMove[0] * aaMovementAmp), int(mouseMove[1] * aaMovementAmp), 0, 0)
+            xMid, yMid, headshot_offset = CalculateBestTargetCoordinates(targets, last_mid_coord, aaRightShift, headshot_mode)
+            MoveMouseToTarget(xMid, yMid, headshot_offset, cWidth, cHeight, aaMovementAmp)
             last_mid_coord = [xMid, yMid]
-
         else:
             last_mid_coord = None
 
         # See what the bot sees
         if visuals:
-            # Loops over every item identified and draws a bounding box
-            for i in range(0, len(targets)):
-                halfW = round(targets["width"][i] / 2)
-                halfH = round(targets["height"][i] / 2)
-                midX = targets['current_mid_x'][i]
-                midY = targets['current_mid_y'][i]
-                (startX, startY, endX, endY) = int(midX + halfW), int(midY +
-                                                                      halfH), int(midX - halfW), int(midY - halfH)
-
-                idx = 0
-                # draw the bounding box and label on the frame
-                label = "{}: {:.2f}%".format("Human", targets["confidence"][i] * 100)
-                cv2.rectangle(npImg, (startX, startY), (endX, endY),
-                              COLORS[idx], 2)
-                y = startY - 15 if startY - 15 > 15 else startY + 15
-                cv2.putText(npImg, label, (startX, y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS[idx], 2)
+            RenderVisuals(cap, targets, blacklistedRegions, COLORS, confidence)
 
         # Forced garbage cleanup every second
         count += 1
@@ -204,7 +255,7 @@ def main():
 
         # See visually what the Aimbot sees
         if visuals:
-            cv2.imshow('Live Feed', npImg)
+            cv2.imshow('Live Feed', cap)
             if (cv2.waitKey(1) & 0xFF) == ord('q'):
                 exit()
     camera.stop()
