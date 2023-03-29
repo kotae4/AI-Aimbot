@@ -11,3 +11,4 @@ tensorrt-8.4.1.5-cp310-none-win_amd64.whl
 __pycache__
 utils/__pycache__
 models/__pycache__
+venv
