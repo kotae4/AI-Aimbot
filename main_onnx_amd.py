@@ -35,14 +35,18 @@ def rectIntersect(r1: list, r2: list) -> bool:
 def rectOverlap(r1: list, r2: list) -> bool:
     return rectIntersect(r1, r2) or rectWithin(r1, r2)
 
+
 def CaptureFrame(camera: dxcam.DXCamera):
     cap = camera.get_latest_frame()
     return cap
+
+
 def ProcessFrame(cap):
     npImg = np.array([cap]) / 255
     npImg = npImg.astype(np.half)
     npImg = np.moveaxis(npImg, 3, 1)
     return npImg
+
 
 def RunInference(ort_sess, npImg, confidence) -> List:
     outputs = ort_sess.run(None, {'images': npImg})
@@ -50,6 +54,7 @@ def RunInference(ort_sess, npImg, confidence) -> List:
     pred = non_max_suppression(
         im, confidence, confidence, 0, False, max_det=10)
     return pred
+
 
 def GetTargetsFromPredictions(pred, npImg, blacklistedRegions) -> List:
     targets = []
@@ -77,6 +82,7 @@ def GetTargetsFromPredictions(pred, npImg, blacklistedRegions) -> List:
         targets, columns=['current_mid_x', 'current_mid_y', 'width', "height"])
     return targets
 
+
 def CalculateBestTargetCoordinates(targets, last_mid_coord, aaRightShift, headshot_mode):
     # Get the last persons mid coordinate if it exists
     if last_mid_coord:
@@ -99,12 +105,14 @@ def CalculateBestTargetCoordinates(targets, last_mid_coord, aaRightShift, headsh
 
     return xMid, yMid, headshot_offset
 
+
 def MoveMouseToTarget(xMid, yMid, headshot_offset, cWidth, cHeight, aaMovementAmp):
     mouseMove = [xMid - cWidth, (yMid - headshot_offset) - cHeight]
     # Moving the mouse
     if win32api.GetKeyState(0x14):
         win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, int(
             mouseMove[0] * aaMovementAmp), int(mouseMove[1] * aaMovementAmp), 0, 0)
+
 
 def RenderVisuals(cap, targets, blacklistedRegions, COLORS, confidence):
     # Loops over every item identified and draws a bounding box
@@ -127,6 +135,7 @@ def RenderVisuals(cap, targets, blacklistedRegions, COLORS, confidence):
     for blackRegion in blacklistedRegions:
         cv2.rectangle(cap, (blackRegion[0], blackRegion[1]), (blackRegion[2],
                                                               blackRegion[3]), (0, 0, 0), 2)
+
 
 def main():
     # Window title to go after and the height of the screenshots
@@ -183,7 +192,7 @@ def main():
     sctArea = {"mon": 1, "top": videoGameWindow.top + (videoGameWindow.height - screenShotHeight) // 2,
                "left": aaRightShift + ((videoGameWindow.left + videoGameWindow.right) // 2) - (screenShotWidth // 2),
                "width": screenShotWidth,
-                         "height": screenShotHeight}
+               "height": screenShotHeight}
 
     # Starting screenshoting engine
     left = aaRightShift + \
@@ -232,8 +241,10 @@ def main():
 
         # If there are people in the center bounding box
         if len(targets) > 0:
-            xMid, yMid, headshot_offset = CalculateBestTargetCoordinates(targets, last_mid_coord, aaRightShift, headshot_mode)
-            MoveMouseToTarget(xMid, yMid, headshot_offset, cWidth, cHeight, aaMovementAmp)
+            xMid, yMid, headshot_offset = CalculateBestTargetCoordinates(
+                targets, last_mid_coord, aaRightShift, headshot_mode)
+            MoveMouseToTarget(xMid, yMid, headshot_offset,
+                              cWidth, cHeight, aaMovementAmp)
             last_mid_coord = [xMid, yMid]
         else:
             last_mid_coord = None
