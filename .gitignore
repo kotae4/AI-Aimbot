@@ -2,6 +2,7 @@ test*
 *.onnx
 *.pt
 *.torchscript
+*.engine
 onnxVer.py
 !yolov5s320.onnx
 yolov5s.engine
